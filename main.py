@@ -7,7 +7,7 @@ BLOGGER_REFRESH_TOKEN = os.environ.get("BLOGGER_REFRESH_TOKEN")
 BLOG_ID = os.environ.get("BLOG_ID")
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-3.0-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 TEMAS = [
  "Premier League - analise da jornada",

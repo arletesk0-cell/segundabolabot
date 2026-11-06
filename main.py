@@ -22,7 +22,7 @@ random.seed(datetime.datetime.now().timestamp())
 cat = random.choice(CATEGORIAS)
 print(f"CATEGORIA SORTEADA: {cat['nome']}")
 
-# === BUSCAR NOTICIA REAL DOS ULTIMOS 2 DIAS NO GOOGLE NEWS ===
+# === BUSCAR NOTICIA REAL DOS ULTIMOS 2 DIAS - SO PARA USAR COMO BASE, SEM MOSTRAR FONTE ===
 def buscar_noticia_recente(query):
     url = f"https://news.google.com/rss/search?q={query}%20when:2d&hl=pt-PT&gl=PT&ceid=PT:pt"
     try:
@@ -63,15 +63,15 @@ if not noticia:
     print("SEM NOTICIA DE 2 DIAS - NAO PUBLICAR")
     raise SystemExit("Sem noticia atual")
 
-print(f"NOTICIA ORIGINAL: {noticia['titulo']} | Data: {noticia['data']}")
+print(f"NOTICIA BASE: {noticia['titulo']} | Data: {noticia['data']}")
 
-# === GEMINI REESCREVE A NOTICIA REAL ===
+# === GEMINI REESCREVE - SEM MENCIONAR FONTE ===
 client = genai.Client(api_key=os.environ["GEMINI_KEY"], http_options=types.HttpOptions(api_version="v1beta"))
 
 prompt = f"""Escreve um artigo de noticias para o blog Segunda Bola, em portugues formal e NEUTRO, como jornalista da BBC.
-REGRAS: Usa APENAS a informacao desta noticia real. NAO inventes resultados, golos ou declaracoes. NUNCA uses: Viva malta, nosso craque, maningue, Forca, estamos contigo, orgulho, magia, foguetao. NUNCA uses eu, nos, nosso, nossa. Tom serio, terceira pessoa. Primeira linha APENAS o titulo novo, neutro. Depois so paragrafos corridos, SEM subtitulos, SEM listas, SEM asteriscos, SEM #.
+REGRAS: Usa APENAS a informacao desta noticia real. NAO inventes resultados, golos ou declaracoes. NUNCA uses: Viva malta, nosso craque, maningue, Forca, estamos contigo, orgulho, magia, foguetao. NUNCA uses eu, nos, nosso, nossa. NUNCA menciones fonte, Google News, ou link. NUNCA escrevas Fonte:. Tom serio, terceira pessoa. Primeira linha APENAS o titulo novo, neutro. Depois so paragrafos corridos, SEM subtitulos, SEM listas, SEM asteriscos, SEM #.
 
-NOTICIA REAL:
+NOTICIA REAL PARA REESCREVER:
 Titulo: {noticia['titulo']}
 Descricao: {noticia['desc']}
 Data: {noticia['data']}
@@ -82,11 +82,11 @@ resposta = client.models.generate_content(model="gemini-3-flash-preview", conten
 texto = resposta.text.replace("**", "").replace("---", "").replace("#", "").strip()
 linhas = [l.strip() for l in texto.split("\n") if l.strip()]
 titulo = linhas[0]
-corpo = [l for l in linhas[1:] if not l.upper().startswith("TEMA:")]
+corpo = [l for l in linhas[1:] if not l.upper().startswith("TEMA:") and "fonte" not in l.lower() and "google" not in l.lower()]
 
-# === DATA E AUTOR - sempre data real de hoje, Maputo ===
+# === DATA E AUTOR ===
 meses = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"]
-agora_maputo = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=2))) # Maputo GMT+2
+agora_maputo = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=2)))
 data_formatada = f"{agora_maputo.day} de {meses[agora_maputo.month-1]} de {agora_maputo.year}"
 data_curta = agora_maputo.strftime("%d/%m/%Y")
 print(f"DATA DA PUBLICACAO: {data_formatada} - AUTOR: Armando Massoca")
@@ -112,20 +112,19 @@ BANCO = [
 ]
 foto_url = buscar_pixabay(cat["pixabay"]) or random.choice(BANCO)
 
-# === HTML FINAL ===
+# === HTML FINAL - LIMPO, SEM LINKS ===
 html = f'''
 <div style="border-bottom:1px solid #eee; padding-bottom:12px; margin-bottom:18px;">
   <p style="font-size:14px; color:#555; margin:0;">Por <b>Armando Massoca</b> | {data_formatada} | {cat["nome"]}</p>
   <p style="font-size:13px; color:#888; margin:4px 0 0 0;">Segunda Bola - Futebol Europeu</p>
 </div>
 <img src="{foto_url}" style="width:100%; border-radius:10px; margin-bottom:15px;" />
-<p style="font-size:13px; color:#888;">Foto: Segunda Bola / Pixabay - {cat["nome"]} - {data_curta}</p>
+<p style="font-size:13px; color:#888;">{cat["nome"]} - {data_curta}</p>
 '''
 
 for linha in corpo:
     html += f'<p style="font-size:17px; line-height:1.7;">{linha}</p>'
 
-html += f'<p style="font-size:13px; color:#666;">Fonte original: <a href="{noticia["link"]}" target="_blank">Ler noticia original</a></p>'
 html += f'<p style="font-size:14px; color:#0a2a5e;"><b>#{cat["nome"].replace(" ", "")} #SegundaBola</b></p>'
 html += f'<div style="border-top:1px solid #eee; margin-top:25px; padding-top:12px;"><p style="font-size:14px; color:#333;">Artigo escrito por <b>Armando Massoca</b></p><p style="font-size:13px; color:#888;">Publicado em {data_formatada} | Categoria: {cat["nome"]} | Segunda Bola</p></div>'
 

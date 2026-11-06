@@ -7,12 +7,19 @@ from googleapiclient.discovery import build
 from google.genai import types
 client = genai.Client(api_key=os.environ["GEMINI_KEY"], http_options=types.HttpOptions(api_version="v1beta"))
 
-prompt = """Escreve um artigo de noticias de futebol para o blog Segunda Bola, em portugues de Mocambique, com linguagem simples e animada.
+prompt = """Escreve um artigo de noticias de futebol para o blog Segunda Bola, em portugues de Mocambique, simples e animado.
+REGRAS OBRIGATORIAS:
+1. A primeira linha tem que ser APENAS o titulo do artigo, sem a palavra Titulo, sem #, sem **, sem aspas.
+2. Depois escreve o artigo normal, sem usar **, sem usar #, sem usar ---.
+3. Usa paragrafos curtos. Para subtitulos, escreve apenas o texto do subtitulo em MAIUSCULAS numa linha sozinha.
+4. No fim, 3 hashtags numa linha.
+Tema: Uma noticia atual e interessante sobre Geny Catamo, futebol mocambicano ou futebol mundial."""
 Tema: Uma noticia atual e interessante do futebol mundial ou mocambicano, com titulo chamativo, introducao, 3 subtitulos e conclusao.
 No fim, escreve 3 hashtags. Nao inventes resultados falsos se nao tiveres a certeza, usa temas gerais e analise."""
 
 resposta = client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
-texto = resposta.text
+texto = resposta.text# Limpar simbolos do Gemini
+texto = texto.replace("**", "").replace("###", "").replace("##", "").replace("#", "").replace("---", "").strip()
 
 # Separar titulo da primeira linha
 linhas = texto.strip().split("\n")

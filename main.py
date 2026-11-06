@@ -4,13 +4,14 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 # 1. Configurar Gemini novo
-client = genai.Client(api_key=os.environ["GEMINI_KEY"])
+from google.genai import types
+client = genai.Client(api_key=os.environ["GEMINI_KEY"], http_options=types.HttpOptions(api_version="v1beta"))
 
 prompt = """Escreve um artigo de noticias de futebol para o blog Segunda Bola, em portugues de Mocambique, com linguagem simples e animada.
 Tema: Uma noticia atual e interessante do futebol mundial ou mocambicano, com titulo chamativo, introducao, 3 subtitulos e conclusao.
 No fim, escreve 3 hashtags. Nao inventes resultados falsos se nao tiveres a certeza, usa temas gerais e analise."""
 
-resposta = client.models.generate_content(model="gemini-3.0-flash", contents=prompt)
+resposta = client.models.generate_content(model="gemini-3-flash-preview", contents=prompt)
 texto = resposta.text
 
 # Separar titulo da primeira linha

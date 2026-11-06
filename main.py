@@ -1,4 +1,4 @@
-import os, requests, random
+import os, requests, random, hashlib
 from google import genai
 from google.genai import types
 from google.oauth2.credentials import Credentials
@@ -21,13 +21,25 @@ for l in linhas[1:]:
     else:
         corpo.append(l)
 
-# === API DE FOTOS - PIXABAY (chave sai na hora) + OPENVERSE (sem chave) ===
+# === BANCO DE FOTOS DO GENY - VAI RODANDO EM VARIOS ARTIGOS ===
+# Aqui tu controlas as fotos. Cada artigo pega uma diferente, pelo titulo.
+# Para adicionar mais, e so colar mais um link aqui dentro, entre aspas e com virgula.
+# Tem que ser link que termina em .jpg e comeca com https://i.pinimg.com/ ou https://upload.wikimedia.org/
+BANCO_GENY = [
+    "https://images.unsplash.com/photo-1579952363873-27f3bade9f55?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1560272564-c83b66b1ad12?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1574629810360-7efbbe195018?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1522778119026-d647f0596c20?q=80&w=1200&auto=format&fit=crop",
+    "https://images.unsplash.com/photo-1553778263-73a83bab9b0c?q=80&w=1200&auto=format&fit=crop",
+]
+
 def buscar_pixabay(pesquisa):
     try:
         key = os.environ.get("PIXABAY_API_KEY", "")
         if not key:
             return None
-        r = requests.get(f"https://pixabay.com/api/?key={key}&q={pesquisa}&image_type=photo&orientation=horizontal&per_page=5&safesearch=true", timeout=15)
+        r = requests.get(f"https://pixabay.com/api/?key={key}&q={pesquisa}&image_type=photo&orientation=horizontal&per_page=10&safesearch=true&category=sports", timeout=15)
         hits = r.json().get("hits", [])
         if hits:
             return random.choice(hits)["largeImageURL"]
@@ -35,39 +47,18 @@ def buscar_pixabay(pesquisa):
         print("Pixabay falhou:", e)
     return None
 
-def buscar_openverse(pesquisa):
-    try:
-        r = requests.get(f"https://api.openverse.org/v1/images/?q={pesquisa}&page_size=5&license_type=all", timeout=15)
-        results = r.json().get("results", [])
-        if results:
-            return random.choice(results)["url"]
-    except Exception as e:
-        print("Openverse falhou:", e)
-    return None
-
-if "Geny" in tema:
-    tentativas = ["soccer player training", "football stadium", "soccer player"]
-elif "Mocambique" in tema:
-    tentativas = ["africa soccer", "football stadium africa", "soccer"]
+# ESCOLHE A FOTO PELO TITULO - assim cada artigo tem foto diferente, nao repete
+if "Geny" in tema or "Sporting" in tema:
+    # Usa o titulo para escolher: titulo diferente = foto diferente
+    numero = int(hashlib.md5(titulo.encode()).hexdigest(), 16) % len(BANCO_GENY)
+    foto_url = BANCO_GENY[numero]
+    fonte = "Segunda Bola"
+    print(f"Foto Geny banco: {numero} -> {foto_url}")
 else:
-    tentativas = ["football stadium", "soccer stadium", "soccer player"]
-
-foto_url = None
-fonte = "Pixabay"
-for t in tentativas:
-    foto_url = buscar_pixabay(t)
-    if foto_url:
-        print(f"Foto Pixabay: {t} -> {foto_url}")
-        break
-    foto_url = buscar_openverse(t)
-    if foto_url:
-        fonte = "Openverse"
-        print(f"Foto Openverse: {t} -> {foto_url}")
-        break
-
-if not foto_url:
-    foto_url = "https://images.unsplash.com/photo-1522778119026-d647f0596c20?q=80&w=1200&auto=format&fit=crop"
-    fonte = "Unsplash"
+    foto_url = buscar_pixabay("football player")
+    fonte = "Pixabay"
+    if not foto_url:
+        foto_url = BANCO_GENY[0]
 
 html = f'<img src="{foto_url}" style="width:100%; border-radius:10px; margin-bottom:15px;" /><p style="font-size:13px; color:#888;">Foto: {fonte} / Segunda Bola</p>'
 for linha in corpo:

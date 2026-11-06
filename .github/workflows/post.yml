@@ -2,30 +2,32 @@ name: Segunda Bola - Auto Post
 
 on:
   schedule:
-    - cron: '*0 _/1 _ _* * * *'  # A cada 30 minutos
-  workflow_dispatch: # Para testares manual tambem
+    - cron: '0 0,3,6,9,12,15,18,21 * * *'
+    - cron: '30 1,4,7,10,13,16,19,22 * * *'
+  workflow_dispatch:
 
 jobs:
   postar:
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar codigo
+      - name: Post Baixar codigo
         uses: actions/checkout@v4
 
-      - name: Instalar Python
+      - name: Post Instalar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Instalar dependencias
-        run: pip install google-genai google-api-python-client google-auth requests
+      - name: Post Instalar dependencias
+        run: pip install -r requirements.txt
 
       - name: Publicar noticia
         env:
-          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
-          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BLOG_ID: ${{ secrets.BLOG_ID }}
           BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
           BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
-          BLOG_ID: ${{ secrets.BLOG_ID }}
+          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: python main.py

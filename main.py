@@ -4,9 +4,14 @@ import requests
 import random
 import datetime
 import html
+import re
+import hashlib
+import unicodedata
 import xml.etree.ElementTree as ET
 
+from urllib.parse import urlsplit, urlunsplit
 from email.utils import parsedate_to_datetime
+
 from google import genai
 from google.genai import types
 from google.oauth2.credentials import Credentials
@@ -14,7 +19,7 @@ from googleapiclient.discovery import build
 
 
 # ==================================================
-# CONFIGURAÇÕES
+# 1. CONFIGURACOES
 # ==================================================
 
 OBRIGATORIAS = [
@@ -28,18 +33,18 @@ OBRIGATORIAS = [
 for variavel in OBRIGATORIAS:
     if not os.environ.get(variavel):
         raise ValueError(
-            f"Configuração em falta: {variavel}. "
-            "Verifica os Secrets do GitHub."
+            f"Configuracao em falta: {variavel}"
         )
 
 MINIMO_PALAVRAS = 450
 MAX_TENTATIVAS_ARTIGO = 3
+MAX_PUBLICACOES_CONSULTADAS = 100
 
 random.seed(datetime.datetime.now().timestamp())
 
 
 # ==================================================
-# CATEGORIAS
+# 2. CATEGORIAS
 # ==================================================
 
 CATEGORIAS = [
@@ -101,22 +106,266 @@ CATEGORIAS = [
 
 
 # ==================================================
-# INICIAR GEMINI
+# 3. INICIAR GEMINI
 # ==================================================
 
 client = genai.Client(
     api_key=os.environ["GEMINI_KEY"],
-    http_options=types.HttpOptions(api_version="v1beta")
+    http_options=types.HttpOptions(
+        api_version="v1beta"
+    )
 )
 
 print("Gemini iniciado com sucesso!")
 
 
 # ==================================================
-# BUSCAR NOTÍCIAS NO GOOGLE NEWS
+# 4. LIGAR AO BLOGGER
 # ==================================================
 
-def buscar_noticia_recente(query):
+creds = Credentials(
+    token=None,
+    refresh_token=os.environ["BLOGGER_REFRESH_TOKEN"],
+    token_uri="https://oauth2.googleapis.com/token",
+    client_id=os.environ["BLOGGER_CLIENT_ID"],
+    client_secret=os.environ["BLOGGER_CLIENT_SECRET"],
+    scopes=[
+        "https://www.googleapis.com/auth/blogger"
+    ]
+)
+
+service = build(
+    "blogger",
+    "v3",
+    credentials=creds
+)
+
+BLOG_ID = os.environ["BLOG_ID"]
+
+
+# ==================================================
+# 5. NORMALIZAR TEXTO E LINKS
+# ==================================================
+
+def normalizar_texto(texto):
+
+    texto = unicodedata.normalize(
+        "NFKD",
+        texto or ""
+    )
+
+    texto = "".join(
+        c for c in texto
+        if not unicodedata.combining(c)
+    )
+
+    texto = texto.lower()
+
+    texto = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        texto
+    )
+
+    return " ".join(texto.split())
+
+
+def normalizar_link(link):
+
+    try:
+
+        partes = urlsplit(link.strip())
+
+        return urlunsplit((
+            partes.scheme.lower(),
+            partes.netloc.lower(),
+            partes.path.rstrip("/"),
+            partes.query,
+            ""
+        ))
+
+    except Exception:
+
+        return link.strip()
+
+
+def criar_hash(valor):
+
+    return hashlib.sha256(
+        valor.encode("utf-8")
+    ).hexdigest()
+
+
+def identificadores_noticia(noticia):
+
+    link = normalizar_link(
+        noticia["link"]
+    )
+
+    titulo_original = normalizar_texto(
+        noticia["titulo"]
+    )
+
+    return {
+        "url_hash": criar_hash(link),
+        "titulo_hash": criar_hash(titulo_original),
+        "titulo_normalizado": titulo_original
+    }
+
+
+# ==================================================
+# 6. CONSULTAR PUBLICACOES DO BLOGGER
+# ==================================================
+
+def consultar_publicacoes():
+
+    publicacoes = []
+
+    try:
+
+        resposta = service.posts().list(
+            blogId=BLOG_ID,
+            maxResults=MAX_PUBLICACOES_CONSULTADAS,
+            fetchBodies=True,
+            orderBy="PUBLISHED"
+        ).execute()
+
+        publicacoes.extend(
+            resposta.get("items", [])
+        )
+
+        print(
+            "Publicacoes consultadas:",
+            len(publicacoes)
+        )
+
+        return publicacoes
+
+    except Exception as erro:
+
+        print(
+            "ERRO ao consultar publicacoes do Blogger:",
+            erro
+        )
+
+        raise RuntimeError(
+            "Nao foi possivel verificar noticias duplicadas. "
+            "Publicacao cancelada por seguranca."
+        )
+
+
+# ==================================================
+# 7. CRIAR BANCO DE NOTICIAS JA PUBLICADAS
+# ==================================================
+
+def construir_banco_duplicados(publicacoes):
+
+    urls_publicadas = set()
+    titulos_publicados = set()
+
+    for post in publicacoes:
+
+        conteudo = post.get("content", "") or ""
+
+        titulo = post.get("title", "") or ""
+
+        status = post.get("status", "LIVE")
+
+        if status != "LIVE":
+            continue
+
+        titulo_normalizado = normalizar_texto(
+            titulo
+        )
+
+        if titulo_normalizado:
+            titulos_publicados.add(
+                titulo_normalizado
+            )
+
+        url_match = re.search(
+            r"SEGUNDA_BOLA_SOURCE_URL_HASH:([a-f0-9]+)",
+            conteudo
+        )
+
+        if url_match:
+            urls_publicadas.add(
+                url_match.group(1)
+            )
+
+        titulo_match = re.search(
+            r"SEGUNDA_BOLA_SOURCE_TITLE_HASH:([a-f0-9]+)",
+            conteudo
+        )
+
+        if titulo_match:
+            titulos_publicados.add(
+                "HASH:" + titulo_match.group(1)
+            )
+
+    print(
+        "Links de noticias registados:",
+        len(urls_publicadas)
+    )
+
+    print(
+        "Titulos registados:",
+        len(titulos_publicados)
+    )
+
+    return urls_publicadas, titulos_publicados
+
+
+# ==================================================
+# 8. VERIFICAR SE A NOTICIA JA FOI PUBLICADA
+# ==================================================
+
+def noticia_duplicada(
+    noticia,
+    urls_publicadas,
+    titulos_publicados
+):
+
+    ids = identificadores_noticia(noticia)
+
+    if ids["url_hash"] in urls_publicadas:
+
+        print(
+            "NOTICIA REPETIDA: link ja publicado."
+        )
+
+        return True
+
+    if (
+        "HASH:" + ids["titulo_hash"]
+        in titulos_publicados
+    ):
+
+        print(
+            "NOTICIA REPETIDA: titulo original ja publicado."
+        )
+
+        return True
+
+    if (
+        ids["titulo_normalizado"]
+        in titulos_publicados
+    ):
+
+        print(
+            "NOTICIA REPETIDA: titulo encontrado no Blogger."
+        )
+
+        return True
+
+    return False
+
+
+# ==================================================
+# 9. BUSCAR NOTICIAS RECENTES
+# ==================================================
+
+def buscar_noticias_recentes(query):
 
     url = (
         "https://news.google.com/rss/search?"
@@ -129,14 +378,20 @@ def buscar_noticia_recente(query):
         resposta = requests.get(
             url,
             timeout=20,
-            headers={"User-Agent": "Mozilla/5.0"}
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            }
         )
 
         resposta.raise_for_status()
 
-        root = ET.fromstring(resposta.content)
+        root = ET.fromstring(
+            resposta.content
+        )
 
-        agora = datetime.datetime.now(datetime.timezone.utc)
+        agora = datetime.datetime.now(
+            datetime.timezone.utc
+        )
 
         limite = agora - datetime.timedelta(days=2)
 
@@ -154,6 +409,7 @@ def buscar_noticia_recente(query):
                 data_pub = parsedate_to_datetime(pub)
 
                 if data_pub.tzinfo is None:
+
                     data_pub = data_pub.replace(
                         tzinfo=datetime.timezone.utc
                     )
@@ -163,9 +419,10 @@ def buscar_noticia_recente(query):
                 )
 
             except Exception:
+
                 continue
 
-            if data_pub >= limite:
+            if data_pub >= limite and titulo and link:
 
                 candidatas.append({
                     "titulo": titulo,
@@ -174,30 +431,36 @@ def buscar_noticia_recente(query):
                     "data": data_pub
                 })
 
-        print(
-            f"Encontradas {len(candidatas)} notícias "
-            f"para {query}"
+        candidatas.sort(
+            key=lambda x: x["data"],
+            reverse=True
         )
 
-        if candidatas:
+        print(
+            f"{len(candidatas)} noticias encontradas: {query}"
+        )
 
-            candidatas.sort(
-                key=lambda noticia: noticia["data"],
-                reverse=True
-            )
-
-            return random.choice(candidatas[:5])
+        return candidatas
 
     except Exception as erro:
 
-        print("Erro Google News:", erro)
+        print(
+            "Erro Google News:",
+            erro
+        )
 
-    return None
+        return []
 
 
 # ==================================================
-# ESCOLHER CATEGORIA E NOTÍCIA
+# 10. ESCOLHER NOTICIA SEM DUPLICACAO
 # ==================================================
+
+publicacoes = consultar_publicacoes()
+
+urls_publicadas, titulos_publicados = (
+    construir_banco_duplicados(publicacoes)
+)
 
 categorias_disponiveis = CATEGORIAS.copy()
 
@@ -208,33 +471,54 @@ cat = None
 
 for categoria in categorias_disponiveis:
 
-    print(f"A pesquisar: {categoria['nome']}")
+    print(
+        "A pesquisar categoria:",
+        categoria["nome"]
+    )
 
-    resultado = buscar_noticia_recente(
+    candidatas = buscar_noticias_recentes(
         categoria["query"]
     )
 
-    if resultado:
+    for candidata in candidatas:
 
+        if noticia_duplicada(
+            candidata,
+            urls_publicadas,
+            titulos_publicados
+        ):
+
+            continue
+
+        noticia = candidata
         cat = categoria
-        noticia = resultado
+
+        print(
+            "NOTICIA NOVA SELECIONADA:",
+            noticia["titulo"]
+        )
+
+        break
+
+    if noticia:
         break
 
 
 if not noticia:
 
     raise SystemExit(
-        "Não foi encontrada nenhuma notícia recente."
+        "Nenhuma noticia nova encontrada. "
+        "Todas as noticias verificadas ja foram publicadas."
     )
 
 
 print("CATEGORIA:", cat["nome"])
-print("NOTÍCIA:", noticia["titulo"])
+print("NOTICIA:", noticia["titulo"])
 print("DATA:", noticia["data"])
 
 
 # ==================================================
-# GERAR ARTIGO COM GEMINI
+# 11. GERAR ARTIGO COM GEMINI
 # ==================================================
 
 titulo = ""
@@ -244,63 +528,51 @@ palavras = 0
 for tentativa in range(MAX_TENTATIVAS_ARTIGO):
 
     prompt = f"""
-Escreve um artigo jornalístico para o blog Segunda Bola.
+Escreve um artigo jornalistico para o blog Segunda Bola.
 
 IDIOMA:
-Português formal, claro e neutro.
+Portugues formal, claro e neutro.
 
-EXTENSÃO:
-- Mínimo de 450 palavras.
-- Entre 6 e 8 parágrafos desenvolvidos.
-- Não escrevas um artigo superficial.
+EXTENSAO:
+- Minimo de 450 palavras.
+- Entre 6 e 8 paragrafos desenvolvidos.
+- Nao escrevas um artigo superficial.
 
 REGRAS EDITORIAIS:
 
-1. Usa exclusivamente os factos fornecidos na notícia.
-2. Não inventes resultados, golos, declarações ou estatísticas.
-3. Não inventes classificações ou próximos jogos.
-4. Não atribuas declarações a treinadores ou jogadores sem confirmação.
-5. Podes acrescentar contexto histórico geral, desde que seja seguro.
-6. Não menciones Google News, fontes ou links.
-7. Não escrevas "Fonte:".
-8. Não uses primeira pessoa.
-9. Mantém um tom jornalístico sério.
-10. Não uses expressões como "Viva malta", "maningue",
-    "nosso craque", "foguetão" ou "magia".
+1. Usa exclusivamente os factos fornecidos na noticia.
+2. Nao inventes resultados, golos, declaracoes ou estatisticas.
+3. Nao inventes classificacoes ou proximos jogos.
+4. Nao atribuas declaracoes sem confirmacao.
+5. Podes acrescentar contexto historico geral seguro.
+6. Nao menciones Google News, fontes ou links.
+7. Nao escrevas Fonte.
+8. Nao uses primeira pessoa.
+9. Mantem tom jornalistico serio.
+10. Nao uses expressoes informais ou promocionais.
 
 FORMATO:
 
-- Primeira linha: apenas um título novo e neutro.
-- Depois: 6 a 8 parágrafos corridos.
-- Sem subtítulos.
+- Primeira linha: apenas um titulo novo e neutro.
+- Depois: 6 a 8 paragrafos corridos.
+- Sem subtitulos.
 - Sem listas.
 - Sem hashtags.
 - Sem asteriscos.
-- Sem comentários sobre o processo de escrita.
 
-ESTRUTURA SUGERIDA:
+NOTICIA REAL:
 
-1. Apresentação da notícia.
-2. Detalhes confirmados do acontecimento.
-3. Contexto da equipa ou competição.
-4. Importância do acontecimento.
-5. Consequências desportivas confirmadas.
-6. Perspetivas futuras sem especulação apresentada como facto.
-7. Conclusão jornalística.
+Titulo: {noticia['titulo']}
 
-NOTÍCIA REAL:
-
-Título: {noticia['titulo']}
-
-Descrição: {noticia['desc']}
+Descricao: {noticia['desc']}
 
 Data: {noticia['data']}
 
 Categoria: {cat['nome']}
 
-Esta é a tentativa {tentativa + 1}.
-Se a resposta anterior foi curta, desenvolve melhor os factos.
+Tentativa: {tentativa + 1}
 
+Escreve um artigo completo, rigoroso e informativo.
 """
 
     try:
@@ -310,11 +582,16 @@ Se a resposta anterior foi curta, desenvolve melhor os factos.
             contents=prompt
         )
 
-        texto = (resposta.text or "").strip()
+        texto = (
+            resposta.text or ""
+        ).strip()
 
         if not texto:
 
-            print("Gemini devolveu resposta vazia.")
+            print(
+                "Gemini devolveu resposta vazia."
+            )
+
             continue
 
         texto = (
@@ -365,28 +642,34 @@ Se a resposta anterior foi curta, desenvolve melhor os factos.
 
         if palavras >= MINIMO_PALAVRAS:
 
-            print("ARTIGO APROVADO!")
+            print(
+                "ARTIGO APROVADO!"
+            )
+
             break
 
     except Exception as erro:
 
-        print("Erro ao gerar artigo:", erro)
+        print(
+            "Erro Gemini:",
+            erro
+        )
 
 
 if palavras < MINIMO_PALAVRAS:
 
     raise RuntimeError(
         f"Artigo rejeitado: {palavras} palavras. "
-        "Não será publicado."
+        "Publicacao cancelada."
     )
 
 
 # ==================================================
-# DATA E AUTOR
+# 12. DATA E AUTOR
 # ==================================================
 
 meses = [
-    "janeiro", "fevereiro", "março",
+    "janeiro", "fevereiro", "marco",
     "abril", "maio", "junho",
     "julho", "agosto", "setembro",
     "outubro", "novembro", "dezembro"
@@ -396,7 +679,9 @@ fuso_maputo = datetime.timezone(
     datetime.timedelta(hours=2)
 )
 
-agora_maputo = datetime.datetime.now(fuso_maputo)
+agora_maputo = datetime.datetime.now(
+    fuso_maputo
+)
 
 data_formatada = (
     f"{agora_maputo.day} de "
@@ -404,7 +689,9 @@ data_formatada = (
     f"{agora_maputo.year}"
 )
 
-data_curta = agora_maputo.strftime("%d/%m/%Y")
+data_curta = agora_maputo.strftime(
+    "%d/%m/%Y"
+)
 
 print("DATA:", data_formatada)
 print("AUTOR: Armando Massoca")
@@ -412,15 +699,17 @@ print("PALAVRAS:", palavras)
 
 
 # ==================================================
-# BUSCAR IMAGEM NO PIXABAY
+# 13. BUSCAR IMAGEM PIXABAY
 # ==================================================
 
 def buscar_pixabay(pesquisa):
 
-    chave = os.environ.get("PIXABAY_API_KEY", "")
+    chave = os.environ.get(
+        "PIXABAY_API_KEY",
+        ""
+    )
 
     if not chave:
-        print("Pixabay sem chave. Usando imagem alternativa.")
         return None
 
     try:
@@ -441,15 +730,23 @@ def buscar_pixabay(pesquisa):
 
         resposta.raise_for_status()
 
-        imagens = resposta.json().get("hits", [])
+        imagens = resposta.json().get(
+            "hits",
+            []
+        )
 
         if imagens:
 
-            return random.choice(imagens)["largeImageURL"]
+            return random.choice(
+                imagens
+            )["largeImageURL"]
 
     except Exception as erro:
 
-        print("Erro Pixabay:", erro)
+        print(
+            "Erro Pixabay:",
+            erro
+        )
 
     return None
 
@@ -467,14 +764,43 @@ foto_url = (
 
 
 # ==================================================
-# CONSTRUIR HTML DO ARTIGO
+# 14. CONSTRUIR MARCADORES ANTI-DUPLICACAO
 # ==================================================
 
-titulo_html = html.escape(titulo)
-categoria_html = html.escape(cat["nome"])
-foto_html = html.escape(foto_url, quote=True)
+ids_noticia = identificadores_noticia(
+    noticia
+)
+
+marcador_url = (
+    "<!-- SEGUNDA_BOLA_SOURCE_URL_HASH:"
+    + ids_noticia["url_hash"]
+    + " -->"
+)
+
+marcador_titulo = (
+    "<!-- SEGUNDA_BOLA_SOURCE_TITLE_HASH:"
+    + ids_noticia["titulo_hash"]
+    + " -->"
+)
+
+
+# ==================================================
+# 15. CONSTRUIR HTML
+# ==================================================
+
+categoria_html = html.escape(
+    cat["nome"]
+)
+
+foto_html = html.escape(
+    foto_url,
+    quote=True
+)
 
 conteudo_html = f"""
+{marcador_url}
+{marcador_titulo}
+
 <div style="border-bottom:1px solid #eee;
 padding-bottom:12px;margin-bottom:18px;">
 
@@ -502,7 +828,9 @@ margin-bottom:15px;" />
 
 for paragrafo in corpo:
 
-    paragrafo_seguro = html.escape(paragrafo)
+    paragrafo_seguro = html.escape(
+        paragrafo
+    )
 
     conteudo_html += f"""
 <p style="font-size:17px;line-height:1.7;
@@ -512,11 +840,14 @@ margin-bottom:18px;">
 """
 
 
-hashtag = cat["nome"].replace(" ", "")
+hashtag = cat["nome"].replace(
+    " ",
+    ""
+)
 
 conteudo_html += f"""
 <p style="font-size:14px;color:#0a2a5e;">
-<b>#{hashtag} #SegundaBola</b>
+<b>#{html.escape(hashtag)} #SegundaBola</b>
 </p>
 
 <div style="border-top:1px solid #eee;
@@ -537,35 +868,40 @@ Segunda Bola
 
 
 # ==================================================
-# LIGAR AO BLOGGER
+# 16. VERIFICACAO FINAL ANTES DA PUBLICACAO
 # ==================================================
 
-creds = Credentials(
-    token=None,
-    refresh_token=os.environ["BLOGGER_REFRESH_TOKEN"],
-    token_uri="https://oauth2.googleapis.com/token",
-    client_id=os.environ["BLOGGER_CLIENT_ID"],
-    client_secret=os.environ["BLOGGER_CLIENT_SECRET"],
-    scopes=[
-        "https://www.googleapis.com/auth/blogger"
-    ]
+# Consulta novamente o Blogger para reduzir
+# o risco de duas execucoes publicarem a mesma noticia.
+
+publicacoes_finais = consultar_publicacoes()
+
+urls_finais, titulos_finais = (
+    construir_banco_duplicados(
+        publicacoes_finais
+    )
 )
 
-service = build(
-    "blogger",
-    "v3",
-    credentials=creds
-)
+if noticia_duplicada(
+    noticia,
+    urls_finais,
+    titulos_finais
+):
+
+    raise SystemExit(
+        "Publicacao cancelada: noticia ja publicada "
+        "por outra execucao."
+    )
 
 
 # ==================================================
-# PUBLICAR NOTÍCIA
+# 17. PUBLICAR NO BLOGGER
 # ==================================================
 
 post = {
     "kind": "blogger#post",
     "blog": {
-        "id": os.environ["BLOG_ID"]
+        "id": BLOG_ID
     },
     "title": titulo,
     "content": conteudo_html,
@@ -579,19 +915,25 @@ post = {
 try:
 
     resultado = service.posts().insert(
-        blogId=os.environ["BLOG_ID"],
-        body=post
+        blogId=BLOG_ID,
+        body=post,
+        isDraft=False
     ).execute()
 
-    print("=" * 50)
-    print("PUBLICAÇÃO REALIZADA COM SUCESSO!")
+    print("=" * 55)
+    print("PUBLICACAO REALIZADA COM SUCESSO!")
     print("CATEGORIA:", cat["label"])
-    print("TÍTULO:", titulo)
+    print("TITULO:", titulo)
     print("PALAVRAS:", palavras)
     print("URL:", resultado.get("url"))
-    print("=" * 50)
+    print("ANTI-DUPLICACAO: ATIVO")
+    print("=" * 55)
 
 except Exception as erro:
 
-    print("ERRO AO PUBLICAR NO BLOGGER:", erro)
+    print(
+        "ERRO AO PUBLICAR NO BLOGGER:",
+        erro
+    )
+
     raise

@@ -1,17 +1,15 @@
 
 import os
-import requests
-import random
-import datetime
-import html
 import re
+import html
+import random
 import hashlib
-import unicodedata
+import datetime
+import requests
 import xml.etree.ElementTree as ET
 
 from urllib.parse import urlsplit, urlunsplit
 from email.utils import parsedate_to_datetime
-
 from google import genai
 from google.genai import types
 from google.oauth2.credentials import Credentials
@@ -30,15 +28,14 @@ OBRIGATORIAS = [
     "BLOGGER_REFRESH_TOKEN"
 ]
 
-for variavel in OBRIGATORIAS:
-    if not os.environ.get(variavel):
-        raise ValueError(
-            f"Configuracao em falta: {variavel}"
-        )
+for nome in OBRIGATORIAS:
+    if not os.environ.get(nome):
+        raise ValueError(f"Falta configurar: {nome}")
+
+BLOG_ID = os.environ["BLOG_ID"]
 
 MINIMO_PALAVRAS = 450
-MAX_TENTATIVAS_ARTIGO = 3
-MAX_PUBLICACOES_CONSULTADAS = 100
+MAX_PUBLICACOES = 100
 
 random.seed(datetime.datetime.now().timestamp())
 
@@ -48,65 +45,59 @@ random.seed(datetime.datetime.now().timestamp())
 # ==================================================
 
 CATEGORIAS = [
-    {
-        "nome": "Champions League",
-        "query": "Champions League",
-        "pixabay": "soccer stadium night lights",
-        "label": "Champions League"
-    },
-    {
-        "nome": "Europa League",
-        "query": "Europa League",
-        "pixabay": "soccer stadium night",
-        "label": "Europa League"
-    },
-    {
-        "nome": "Conference League",
-        "query": "Conference League",
-        "pixabay": "football stadium night",
-        "label": "Conference League"
-    },
-    {
-        "nome": "Premier League",
-        "query": "Premier League",
-        "pixabay": "football player action",
-        "label": "Premier League"
-    },
-    {
-        "nome": "La Liga",
-        "query": "La Liga Real Madrid Barcelona",
-        "pixabay": "football player",
-        "label": "La Liga"
-    },
-    {
-        "nome": "Serie A",
-        "query": "Serie A Italia Inter Milan Juventus",
-        "pixabay": "football player",
-        "label": "Serie A"
-    },
-    {
-        "nome": "Bundesliga",
-        "query": "Bundesliga Bayern Dortmund",
-        "pixabay": "football player",
-        "label": "Bundesliga"
-    },
-    {
-        "nome": "Ligue 1",
-        "query": "Ligue 1 PSG",
-        "pixabay": "football player",
-        "label": "Ligue 1"
-    },
-    {
-        "nome": "Liga Portugal",
-        "query": "Liga Portugal Sporting Benfica Porto",
-        "pixabay": "football player",
-        "label": "Liga Portugal"
-    }
+    {"nome": "Champions League", "query": "Champions League", "pixabay": "Champions League football stadium", "label": "Champions League"},
+    {"nome": "Europa League", "query": "Europa League", "pixabay": "Europa League football", "label": "Europa League"},
+    {"nome": "Conference League", "query": "Conference League", "pixabay": "football stadium", "label": "Conference League"},
+    {"nome": "Premier League", "query": "Premier League", "pixabay": "English Premier League football", "label": "Premier League"},
+    {"nome": "La Liga", "query": "La Liga Real Madrid Barcelona", "pixabay": "Spanish football", "label": "La Liga"},
+    {"nome": "Serie A", "query": "Serie A Italia Inter Milan Juventus", "pixabay": "Italian football", "label": "Serie A"},
+    {"nome": "Bundesliga", "query": "Bundesliga Bayern Dortmund", "pixabay": "German football", "label": "Bundesliga"},
+    {"nome": "Ligue 1", "query": "Ligue 1 PSG", "pixabay": "French football", "label": "Ligue 1"},
+    {"nome": "Liga Portugal", "query": "Liga Portugal Sporting Benfica Porto", "pixabay": "Portuguese football", "label": "Liga Portugal"}
 ]
 
 
 # ==================================================
-# 3. INICIAR GEMINI
+# 3. CLUBES E PESQUISAS DE IMAGENS
+# ==================================================
+
+CLUBES = {
+    "real madrid": "Real Madrid football",
+    "real madrid cf": "Real Madrid football",
+    "barcelona": "FC Barcelona football",
+    "fc barcelona": "FC Barcelona football",
+    "manchester city": "Manchester City football",
+    "man city": "Manchester City football",
+    "manchester united": "Manchester United football",
+    "man united": "Manchester United football",
+    "arsenal": "Arsenal FC football",
+    "liverpool": "Liverpool FC football",
+    "chelsea": "Chelsea FC football",
+    "tottenham": "Tottenham Hotspur football",
+    "newcastle": "Newcastle United football",
+    "bayern munich": "Bayern Munich football",
+    "bayern": "Bayern Munich football",
+    "borussia dortmund": "Borussia Dortmund football",
+    "dortmund": "Borussia Dortmund football",
+    "psg": "Paris Saint Germain football",
+    "paris saint-germain": "Paris Saint Germain football",
+    "paris saint germain": "Paris Saint Germain football",
+    "inter milan": "Inter Milan football",
+    "inter de milao": "Inter Milan football",
+    "ac milan": "AC Milan football",
+    "juventus": "Juventus football",
+    "napoli": "Napoli football",
+    "atletico madrid": "Atletico Madrid football",
+    "benfica": "Benfica football",
+    "sporting": "Sporting CP football",
+    "sporting cp": "Sporting CP football",
+    "porto": "FC Porto football",
+    "monaco": "AS Monaco football"
+}
+
+
+# ==================================================
+# 4. INICIAR GEMINI
 # ==================================================
 
 client = genai.Client(
@@ -116,11 +107,11 @@ client = genai.Client(
     )
 )
 
-print("Gemini iniciado com sucesso!")
+print("Gemini iniciado.")
 
 
 # ==================================================
-# 4. LIGAR AO BLOGGER
+# 5. LIGAR AO BLOGGER
 # ==================================================
 
 creds = Credentials(
@@ -129,9 +120,7 @@ creds = Credentials(
     token_uri="https://oauth2.googleapis.com/token",
     client_id=os.environ["BLOGGER_CLIENT_ID"],
     client_secret=os.environ["BLOGGER_CLIENT_SECRET"],
-    scopes=[
-        "https://www.googleapis.com/auth/blogger"
-    ]
+    scopes=["https://www.googleapis.com/auth/blogger"]
 )
 
 service = build(
@@ -140,14 +129,13 @@ service = build(
     credentials=creds
 )
 
-BLOG_ID = os.environ["BLOG_ID"]
-
 
 # ==================================================
-# 5. NORMALIZAR TEXTO E LINKS
+# 6. FUNCOES DE NORMALIZACAO
 # ==================================================
 
-def normalizar_texto(texto):
+def normalizar(texto):
+    import unicodedata
 
     texto = unicodedata.normalize(
         "NFKD",
@@ -170,10 +158,14 @@ def normalizar_texto(texto):
     return " ".join(texto.split())
 
 
+def gerar_hash(texto):
+    return hashlib.sha256(
+        texto.encode("utf-8")
+    ).hexdigest()
+
+
 def normalizar_link(link):
-
     try:
-
         partes = urlsplit(link.strip())
 
         return urlunsplit((
@@ -185,187 +177,114 @@ def normalizar_link(link):
         ))
 
     except Exception:
-
         return link.strip()
 
 
-def criar_hash(valor):
-
-    return hashlib.sha256(
-        valor.encode("utf-8")
-    ).hexdigest()
-
-
-def identificadores_noticia(noticia):
-
-    link = normalizar_link(
-        noticia["link"]
-    )
-
-    titulo_original = normalizar_texto(
-        noticia["titulo"]
-    )
-
-    return {
-        "url_hash": criar_hash(link),
-        "titulo_hash": criar_hash(titulo_original),
-        "titulo_normalizado": titulo_original
-    }
-
-
 # ==================================================
-# 6. CONSULTAR PUBLICACOES DO BLOGGER
+# 7. CONSULTAR PUBLICACOES
 # ==================================================
 
 def consultar_publicacoes():
 
-    publicacoes = []
-
     try:
-
         resposta = service.posts().list(
             blogId=BLOG_ID,
-            maxResults=MAX_PUBLICACOES_CONSULTADAS,
+            maxResults=MAX_PUBLICACOES,
             fetchBodies=True,
             orderBy="PUBLISHED"
         ).execute()
 
-        publicacoes.extend(
-            resposta.get("items", [])
-        )
+        publicacoes = resposta.get("items", [])
 
         print(
-            "Publicacoes consultadas:",
+            "Publicacoes encontradas:",
             len(publicacoes)
         )
 
         return publicacoes
 
     except Exception as erro:
-
-        print(
-            "ERRO ao consultar publicacoes do Blogger:",
-            erro
-        )
-
+        print("Erro ao consultar Blogger:", erro)
         raise RuntimeError(
-            "Nao foi possivel verificar noticias duplicadas. "
-            "Publicacao cancelada por seguranca."
+            "Nao foi possivel verificar duplicacoes."
         )
 
 
-# ==================================================
-# 7. CRIAR BANCO DE NOTICIAS JA PUBLICADAS
-# ==================================================
+def construir_banco(publicacoes):
 
-def construir_banco_duplicados(publicacoes):
-
-    urls_publicadas = set()
-    titulos_publicados = set()
+    links = set()
+    titulos = set()
 
     for post in publicacoes:
 
-        conteudo = post.get("content", "") or ""
-
-        titulo = post.get("title", "") or ""
-
-        status = post.get("status", "LIVE")
-
-        if status != "LIVE":
+        if post.get("status", "LIVE") != "LIVE":
             continue
 
-        titulo_normalizado = normalizar_texto(
-            titulo
+        titulo = normalizar(
+            post.get("title", "")
         )
 
-        if titulo_normalizado:
-            titulos_publicados.add(
-                titulo_normalizado
-            )
+        if titulo:
+            titulos.add(titulo)
+
+        conteudo = post.get("content", "") or ""
 
         url_match = re.search(
             r"SEGUNDA_BOLA_SOURCE_URL_HASH:([a-f0-9]+)",
             conteudo
         )
 
-        if url_match:
-            urls_publicadas.add(
-                url_match.group(1)
-            )
-
         titulo_match = re.search(
             r"SEGUNDA_BOLA_SOURCE_TITLE_HASH:([a-f0-9]+)",
             conteudo
         )
 
+        if url_match:
+            links.add(url_match.group(1))
+
         if titulo_match:
-            titulos_publicados.add(
+            titulos.add(
                 "HASH:" + titulo_match.group(1)
             )
 
-    print(
-        "Links de noticias registados:",
-        len(urls_publicadas)
-    )
-
-    print(
-        "Titulos registados:",
-        len(titulos_publicados)
-    )
-
-    return urls_publicadas, titulos_publicados
+    return links, titulos
 
 
-# ==================================================
-# 8. VERIFICAR SE A NOTICIA JA FOI PUBLICADA
-# ==================================================
-
-def noticia_duplicada(
+def verificar_duplicacao(
     noticia,
-    urls_publicadas,
-    titulos_publicados
+    links,
+    titulos
 ):
 
-    ids = identificadores_noticia(noticia)
+    link_hash = gerar_hash(
+        normalizar_link(noticia["link"])
+    )
 
-    if ids["url_hash"] in urls_publicadas:
+    titulo_hash = gerar_hash(
+        normalizar(noticia["titulo"])
+    )
 
-        print(
-            "NOTICIA REPETIDA: link ja publicado."
-        )
+    titulo_normalizado = normalizar(
+        noticia["titulo"]
+    )
 
+    if link_hash in links:
         return True
 
-    if (
-        "HASH:" + ids["titulo_hash"]
-        in titulos_publicados
-    ):
-
-        print(
-            "NOTICIA REPETIDA: titulo original ja publicado."
-        )
-
+    if "HASH:" + titulo_hash in titulos:
         return True
 
-    if (
-        ids["titulo_normalizado"]
-        in titulos_publicados
-    ):
-
-        print(
-            "NOTICIA REPETIDA: titulo encontrado no Blogger."
-        )
-
+    if titulo_normalizado in titulos:
         return True
 
     return False
 
 
 # ==================================================
-# 9. BUSCAR NOTICIAS RECENTES
+# 8. BUSCAR NOTICIAS RECENTES
 # ==================================================
 
-def buscar_noticias_recentes(query):
+def buscar_noticias(query):
 
     url = (
         "https://news.google.com/rss/search?"
@@ -374,7 +293,6 @@ def buscar_noticias_recentes(query):
     )
 
     try:
-
         resposta = requests.get(
             url,
             timeout=20,
@@ -389,13 +307,14 @@ def buscar_noticias_recentes(query):
             resposta.content
         )
 
-        agora = datetime.datetime.now(
-            datetime.timezone.utc
+        limite = (
+            datetime.datetime.now(
+                datetime.timezone.utc
+            )
+            - datetime.timedelta(days=2)
         )
 
-        limite = agora - datetime.timedelta(days=2)
-
-        candidatas = []
+        noticias = []
 
         for item in root.findall(".//item"):
 
@@ -405,98 +324,86 @@ def buscar_noticias_recentes(query):
             pub = item.findtext("pubDate") or ""
 
             try:
+                data = parsedate_to_datetime(pub)
 
-                data_pub = parsedate_to_datetime(pub)
-
-                if data_pub.tzinfo is None:
-
-                    data_pub = data_pub.replace(
+                if data.tzinfo is None:
+                    data = data.replace(
                         tzinfo=datetime.timezone.utc
                     )
 
-                data_pub = data_pub.astimezone(
+                data = data.astimezone(
                     datetime.timezone.utc
                 )
 
             except Exception:
-
                 continue
 
-            if data_pub >= limite and titulo and link:
+            if data >= limite and titulo and link:
 
-                candidatas.append({
+                noticias.append({
                     "titulo": titulo,
                     "desc": descricao,
                     "link": link,
-                    "data": data_pub
+                    "data": data
                 })
 
-        candidatas.sort(
+        noticias.sort(
             key=lambda x: x["data"],
             reverse=True
         )
 
-        print(
-            f"{len(candidatas)} noticias encontradas: {query}"
-        )
-
-        return candidatas
+        return noticias
 
     except Exception as erro:
-
-        print(
-            "Erro Google News:",
-            erro
-        )
-
+        print("Erro Google News:", erro)
         return []
 
 
 # ==================================================
-# 10. ESCOLHER NOTICIA SEM DUPLICACAO
+# 9. ESCOLHER NOTICIA SEM REPETIR
 # ==================================================
 
 publicacoes = consultar_publicacoes()
 
-urls_publicadas, titulos_publicados = (
-    construir_banco_duplicados(publicacoes)
+links_publicados, titulos_publicados = (
+    construir_banco(publicacoes)
 )
 
-categorias_disponiveis = CATEGORIAS.copy()
+categorias = CATEGORIAS.copy()
 
-random.shuffle(categorias_disponiveis)
+random.shuffle(categorias)
 
 noticia = None
 cat = None
 
-for categoria in categorias_disponiveis:
+for categoria in categorias:
 
     print(
-        "A pesquisar categoria:",
+        "A procurar:",
         categoria["nome"]
     )
 
-    candidatas = buscar_noticias_recentes(
+    resultados = buscar_noticias(
         categoria["query"]
     )
 
-    for candidata in candidatas:
+    for resultado in resultados:
 
-        if noticia_duplicada(
-            candidata,
-            urls_publicadas,
+        if verificar_duplicacao(
+            resultado,
+            links_publicados,
             titulos_publicados
         ):
 
+            print(
+                "Noticia repetida ignorada:",
+                resultado["titulo"]
+            )
+
             continue
 
-        noticia = candidata
+        noticia = resultado
         cat = categoria
-
-        print(
-            "NOTICIA NOVA SELECIONADA:",
-            noticia["titulo"]
-        )
 
         break
 
@@ -505,60 +412,50 @@ for categoria in categorias_disponiveis:
 
 
 if not noticia:
-
     raise SystemExit(
-        "Nenhuma noticia nova encontrada. "
-        "Todas as noticias verificadas ja foram publicadas."
+        "Nao existem noticias novas para publicar."
     )
 
-
-print("CATEGORIA:", cat["nome"])
 print("NOTICIA:", noticia["titulo"])
-print("DATA:", noticia["data"])
+print("CATEGORIA:", cat["nome"])
 
 
 # ==================================================
-# 11. GERAR ARTIGO COM GEMINI
+# 10. GERAR ARTIGO COM GEMINI
 # ==================================================
 
 titulo = ""
 corpo = []
 palavras = 0
 
-for tentativa in range(MAX_TENTATIVAS_ARTIGO):
+for tentativa in range(3):
 
     prompt = f"""
 Escreve um artigo jornalistico para o blog Segunda Bola.
 
 IDIOMA:
-Portugues formal, claro e neutro.
+Portugues formal e neutro.
 
 EXTENSAO:
 - Minimo de 450 palavras.
 - Entre 6 e 8 paragrafos desenvolvidos.
-- Nao escrevas um artigo superficial.
 
-REGRAS EDITORIAIS:
-
-1. Usa exclusivamente os factos fornecidos na noticia.
-2. Nao inventes resultados, golos, declaracoes ou estatisticas.
-3. Nao inventes classificacoes ou proximos jogos.
-4. Nao atribuas declaracoes sem confirmacao.
-5. Podes acrescentar contexto historico geral seguro.
-6. Nao menciones Google News, fontes ou links.
-7. Nao escrevas Fonte.
-8. Nao uses primeira pessoa.
-9. Mantem tom jornalistico serio.
-10. Nao uses expressoes informais ou promocionais.
+REGRAS:
+- Usa apenas factos sustentados pela noticia fornecida.
+- Nao inventes resultados, golos ou declaracoes.
+- Nao inventes classificacoes ou estatisticas.
+- Nao inventes datas de proximos jogos.
+- Podes acrescentar contexto historico geral seguro.
+- Nunca menciones Google News ou fontes.
+- Nunca escrevas Fonte.
+- Nunca uses primeira pessoa.
+- Tom serio e jornalistico.
+- Sem expressoes informais.
 
 FORMATO:
-
-- Primeira linha: apenas um titulo novo e neutro.
-- Depois: 6 a 8 paragrafos corridos.
-- Sem subtitulos.
-- Sem listas.
-- Sem hashtags.
-- Sem asteriscos.
+Primeira linha: apenas titulo novo e neutro.
+Depois: paragrafos corridos.
+Sem subtitulos, listas, hashtags ou asteriscos.
 
 NOTICIA REAL:
 
@@ -572,7 +469,7 @@ Categoria: {cat['nome']}
 
 Tentativa: {tentativa + 1}
 
-Escreve um artigo completo, rigoroso e informativo.
+Escreve um artigo completo e informativo.
 """
 
     try:
@@ -587,11 +484,6 @@ Escreve um artigo completo, rigoroso e informativo.
         ).strip()
 
         if not texto:
-
-            print(
-                "Gemini devolveu resposta vazia."
-            )
-
             continue
 
         texto = (
@@ -612,20 +504,12 @@ Escreve um artigo completo, rigoroso e informativo.
 
         titulo_temp = linhas[0]
 
-        corpo_temp = []
-
-        for linha in linhas[1:]:
-
-            if linha.upper().startswith("TEMA:"):
-                continue
-
-            if "google news" in linha.lower():
-                continue
-
-            if linha.lower().startswith("fonte:"):
-                continue
-
-            corpo_temp.append(linha)
+        corpo_temp = [
+            linha for linha in linhas[1:]
+            if not linha.upper().startswith("TEMA:")
+            and "google news" not in linha.lower()
+            and not linha.lower().startswith("fonte:")
+        ]
 
         palavras_temp = len(
             " ".join(corpo_temp).split()
@@ -641,65 +525,62 @@ Escreve um artigo completo, rigoroso e informativo.
         palavras = palavras_temp
 
         if palavras >= MINIMO_PALAVRAS:
-
-            print(
-                "ARTIGO APROVADO!"
-            )
-
             break
 
     except Exception as erro:
-
-        print(
-            "Erro Gemini:",
-            erro
-        )
+        print("Erro Gemini:", erro)
 
 
 if palavras < MINIMO_PALAVRAS:
-
     raise RuntimeError(
-        f"Artigo rejeitado: {palavras} palavras. "
-        "Publicacao cancelada."
+        "Artigo demasiado curto. Publicacao cancelada."
     )
 
 
 # ==================================================
-# 12. DATA E AUTOR
+# 11. IDENTIFICAR CLUBE PARA IMAGEM
 # ==================================================
 
-meses = [
-    "janeiro", "fevereiro", "marco",
-    "abril", "maio", "junho",
-    "julho", "agosto", "setembro",
-    "outubro", "novembro", "dezembro"
-]
+def construir_pesquisas_imagem(noticia, categoria):
 
-fuso_maputo = datetime.timezone(
-    datetime.timedelta(hours=2)
-)
+    texto = normalizar(
+        noticia["titulo"] + " " + noticia["desc"]
+    )
 
-agora_maputo = datetime.datetime.now(
-    fuso_maputo
-)
+    pesquisas = []
 
-data_formatada = (
-    f"{agora_maputo.day} de "
-    f"{meses[agora_maputo.month - 1]} de "
-    f"{agora_maputo.year}"
-)
+    for clube, pesquisa in CLUBES.items():
 
-data_curta = agora_maputo.strftime(
-    "%d/%m/%Y"
-)
+        clube_normalizado = normalizar(clube)
 
-print("DATA:", data_formatada)
-print("AUTOR: Armando Massoca")
-print("PALAVRAS:", palavras)
+        if clube_normalizado in texto:
+
+            if pesquisa not in pesquisas:
+                pesquisas.append(pesquisa)
+
+    # Quando nao identifica um clube, usa a categoria.
+    if not pesquisas:
+        pesquisas.append(
+            categoria["pixabay"]
+        )
+
+    # Pesquisa alternativa mais abrangente.
+    pesquisas.append(
+        categoria["pixabay"]
+    )
+
+    # Remover pesquisas repetidas.
+    resultado = []
+
+    for pesquisa in pesquisas:
+        if pesquisa not in resultado:
+            resultado.append(pesquisa)
+
+    return resultado[:3]
 
 
 # ==================================================
-# 13. BUSCAR IMAGEM PIXABAY
+# 12. BUSCAR IMAGEM NO PIXABAY
 # ==================================================
 
 def buscar_pixabay(pesquisa):
@@ -710,6 +591,7 @@ def buscar_pixabay(pesquisa):
     )
 
     if not chave:
+        print("PIXABAY_API_KEY nao configurada.")
         return None
 
     try:
@@ -721,7 +603,7 @@ def buscar_pixabay(pesquisa):
                 "q": pesquisa,
                 "image_type": "photo",
                 "orientation": "horizontal",
-                "per_page": 10,
+                "per_page": 15,
                 "safesearch": "true",
                 "category": "sports"
             },
@@ -737,19 +619,24 @@ def buscar_pixabay(pesquisa):
 
         if imagens:
 
-            return random.choice(
-                imagens
-            )["largeImageURL"]
+            imagem = random.choice(imagens)
+
+            print(
+                "Imagem encontrada para:",
+                pesquisa
+            )
+
+            return imagem["largeImageURL"]
 
     except Exception as erro:
-
-        print(
-            "Erro Pixabay:",
-            erro
-        )
+        print("Erro Pixabay:", erro)
 
     return None
 
+
+# ==================================================
+# 13. BANCO DE IMAGENS DE SEGURANCA
+# ==================================================
 
 BANCO_IMAGENS = [
     "https://images.unsplash.com/photo-1508098682722-e99c43a406b2?q=80&w=1200&auto=format&fit=crop",
@@ -757,49 +644,105 @@ BANCO_IMAGENS = [
     "https://images.unsplash.com/photo-1579952363873-27f3bade9f55?q=80&w=1200&auto=format&fit=crop"
 ]
 
-foto_url = (
-    buscar_pixabay(cat["pixabay"])
-    or random.choice(BANCO_IMAGENS)
+
+# ==================================================
+# 14. SELECIONAR IMAGEM
+# ==================================================
+
+pesquisas = construir_pesquisas_imagem(
+    noticia,
+    cat
+)
+
+foto_url = None
+
+for pesquisa in pesquisas:
+
+    print(
+        "Pesquisa de imagem:",
+        pesquisa
+    )
+
+    foto_url = buscar_pixabay(
+        pesquisa
+    )
+
+    if foto_url:
+        break
+
+
+if not foto_url:
+
+    foto_url = random.choice(
+        BANCO_IMAGENS
+    )
+
+    print(
+        "A utilizar imagem de seguranca."
+    )
+
+
+# ==================================================
+# 15. DATA E AUTOR
+# ==================================================
+
+meses = [
+    "janeiro", "fevereiro", "marco",
+    "abril", "maio", "junho",
+    "julho", "agosto", "setembro",
+    "outubro", "novembro", "dezembro"
+]
+
+fuso = datetime.timezone(
+    datetime.timedelta(hours=2)
+)
+
+agora = datetime.datetime.now(fuso)
+
+data_formatada = (
+    f"{agora.day} de "
+    f"{meses[agora.month - 1]} de "
+    f"{agora.year}"
+)
+
+data_curta = agora.strftime(
+    "%d/%m/%Y"
 )
 
 
 # ==================================================
-# 14. CONSTRUIR MARCADORES ANTI-DUPLICACAO
+# 16. MARCADORES ANTI-DUPLICACAO
 # ==================================================
 
-ids_noticia = identificadores_noticia(
-    noticia
+link_hash = gerar_hash(
+    normalizar_link(noticia["link"])
 )
 
-marcador_url = (
-    "<!-- SEGUNDA_BOLA_SOURCE_URL_HASH:"
-    + ids_noticia["url_hash"]
-    + " -->"
+titulo_hash = gerar_hash(
+    normalizar(noticia["titulo"])
 )
 
-marcador_titulo = (
-    "<!-- SEGUNDA_BOLA_SOURCE_TITLE_HASH:"
-    + ids_noticia["titulo_hash"]
-    + " -->"
-)
+marcadores = f"""
+<!-- SEGUNDA_BOLA_SOURCE_URL_HASH:{link_hash} -->
+<!-- SEGUNDA_BOLA_SOURCE_TITLE_HASH:{titulo_hash} -->
+"""
 
 
 # ==================================================
-# 15. CONSTRUIR HTML
+# 17. CONSTRUIR HTML
 # ==================================================
 
-categoria_html = html.escape(
+categoria_segura = html.escape(
     cat["nome"]
 )
 
-foto_html = html.escape(
+foto_segura = html.escape(
     foto_url,
     quote=True
 )
 
-conteudo_html = f"""
-{marcador_url}
-{marcador_titulo}
+html_artigo = f"""
+{marcadores}
 
 <div style="border-bottom:1px solid #eee;
 padding-bottom:12px;margin-bottom:18px;">
@@ -807,22 +750,24 @@ padding-bottom:12px;margin-bottom:18px;">
 <p style="font-size:14px;color:#555;margin:0;">
 Por <b>Armando Massoca</b> |
 {data_formatada} |
-{categoria_html}
+{categoria_segura}
 </p>
 
-<p style="font-size:13px;color:#888;margin:4px 0 0 0;">
+<p style="font-size:13px;color:#888;margin:4px 0 0;">
 Segunda Bola - Futebol Europeu
 </p>
 
 </div>
 
-<img src="{foto_html}"
-alt="{categoria_html}"
+<img
+src="{foto_segura}"
+alt="Fotografia ilustrativa de {categoria_segura}"
 style="width:100%;height:auto;border-radius:10px;
-margin-bottom:15px;" />
+margin-bottom:15px;"
+/>
 
 <p style="font-size:13px;color:#888;">
-{categoria_html} - {data_curta}
+{categoria_segura} - {data_curta}
 </p>
 """
 
@@ -832,7 +777,7 @@ for paragrafo in corpo:
         paragrafo
     )
 
-    conteudo_html += f"""
+    html_artigo += f"""
 <p style="font-size:17px;line-height:1.7;
 margin-bottom:18px;">
 {paragrafo_seguro}
@@ -840,14 +785,9 @@ margin-bottom:18px;">
 """
 
 
-hashtag = cat["nome"].replace(
-    " ",
-    ""
-)
-
-conteudo_html += f"""
+html_artigo += f"""
 <p style="font-size:14px;color:#0a2a5e;">
-<b>#{html.escape(hashtag)} #SegundaBola</b>
+<b>#{cat["nome"].replace(" ", "")} #SegundaBola</b>
 </p>
 
 <div style="border-top:1px solid #eee;
@@ -859,7 +799,7 @@ Artigo escrito por <b>Armando Massoca</b>
 
 <p style="font-size:13px;color:#888;">
 Publicado em {data_formatada} |
-Categoria: {categoria_html} |
+Categoria: {categoria_segura} |
 Segunda Bola
 </p>
 
@@ -868,34 +808,28 @@ Segunda Bola
 
 
 # ==================================================
-# 16. VERIFICACAO FINAL ANTES DA PUBLICACAO
+# 18. VERIFICACAO FINAL
 # ==================================================
-
-# Consulta novamente o Blogger para reduzir
-# o risco de duas execucoes publicarem a mesma noticia.
 
 publicacoes_finais = consultar_publicacoes()
 
-urls_finais, titulos_finais = (
-    construir_banco_duplicados(
-        publicacoes_finais
-    )
+links_finais, titulos_finais = construir_banco(
+    publicacoes_finais
 )
 
-if noticia_duplicada(
+if verificar_duplicacao(
     noticia,
-    urls_finais,
+    links_finais,
     titulos_finais
 ):
 
     raise SystemExit(
-        "Publicacao cancelada: noticia ja publicada "
-        "por outra execucao."
+        "Noticia repetida. Publicacao cancelada."
     )
 
 
 # ==================================================
-# 17. PUBLICAR NO BLOGGER
+# 19. PUBLICAR NO BLOGGER
 # ==================================================
 
 post = {
@@ -904,7 +838,7 @@ post = {
         "id": BLOG_ID
     },
     "title": titulo,
-    "content": conteudo_html,
+    "content": html_artigo,
     "labels": [
         cat["label"],
         "Segunda Bola",
@@ -922,17 +856,18 @@ try:
 
     print("=" * 55)
     print("PUBLICACAO REALIZADA COM SUCESSO!")
-    print("CATEGORIA:", cat["label"])
     print("TITULO:", titulo)
+    print("CATEGORIA:", cat["nome"])
     print("PALAVRAS:", palavras)
-    print("URL:", resultado.get("url"))
+    print("IMAGEM:", foto_url)
     print("ANTI-DUPLICACAO: ATIVO")
+    print("URL:", resultado.get("url"))
     print("=" * 55)
 
 except Exception as erro:
 
     print(
-        "ERRO AO PUBLICAR NO BLOGGER:",
+        "ERRO AO PUBLICAR:",
         erro
     )
 
